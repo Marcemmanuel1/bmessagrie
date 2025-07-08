@@ -25,10 +25,10 @@ const JWT_EXPIRES_IN = "24h";
 
 // Configuration de la base de données
 const pool = mysql.createPool({
-  host: "localhost",
-  user: "root",
-  password: "",
-  database: "messagerie_app",
+  host: "localhostmysql-nexuchat.alwaysdata.net",
+  user: "nexuchat",
+  password: "Goldegelil@1",
+  database: "nexuchat_messagerieapp",
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
