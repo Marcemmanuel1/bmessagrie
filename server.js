@@ -26,7 +26,7 @@ const io = socketio(server, {
   cors: {
     origin: process.env.ALLOWED_ORIGINS?.split(',') || [
       'http://localhost:5173',
-      'https://yourproductiondomain.com'
+      'https://nexuchat.onrender.com'
     ],
     methods: ['GET', 'POST'],
     credentials: true
@@ -41,7 +41,7 @@ app.use(helmet());
 app.use(cors({
   origin: process.env.ALLOWED_ORIGINS?.split(',') || [
     'http://localhost:5173',
-    'https://yourproductiondomain.com'
+    'https://nexuchat.onrender.com'
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
@@ -62,10 +62,10 @@ app.use('/api/', apiLimiter);
 
 // Configuration de la base de données
 const pool = mysql.createPool({
-  host: process.env.DB_HOST || 'localhost',
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'messenger',
+  host: process.env.DB_HOST || 'mysql-nexuchat.alwaysdata.net',
+  user: process.env.DB_USER || 'nexuchat',
+  password: process.env.DB_PASSWORD || 'Goldegelil@1',
+  database: process.env.DB_NAME || 'nexuchat_messagerieapp',
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
