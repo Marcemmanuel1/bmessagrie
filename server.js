@@ -15,8 +15,8 @@ const io = socketio(server, {
   cors: {
     origin: ["https://nexuchat.onrender.com", "http://127.0.0.1:5173"],
     methods: ["GET", "POST"],
-    credentials: true
-  }
+    credentials: true,
+  },
 });
 
 const PORT = 5000;
@@ -35,12 +35,14 @@ const pool = mysql.createPool({
 });
 
 // Middlewares
-app.use(cors({ 
-  origin: ["https://nexuchat.onrender.com", "http://127.0.0.1:5173"], 
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE"],
-  allowedHeaders: ["Content-Type", "Authorization"]
-}));
+app.use(
+  cors({
+    origin: ["https://nexuchat.onrender.com", "http://127.0.0.1:5173"],
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -50,7 +52,7 @@ const uploadsDir = path.join(__dirname, "uploads");
 const avatarsDir = path.join(uploadsDir, "avatars");
 const messagesDir = path.join(uploadsDir, "messages");
 
-[uploadsDir, avatarsDir, messagesDir].forEach(dir => {
+[uploadsDir, avatarsDir, messagesDir].forEach((dir) => {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 });
 
@@ -61,7 +63,8 @@ app.use("/uploads/messages", express.static(messagesDir));
 const uploadAvatar = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, avatarsDir),
-    filename: (req, file, cb) => cb(null, `avatar-${Date.now()}${path.extname(file.originalname)}`),
+    filename: (req, file, cb) =>
+      cb(null, `avatar-${Date.now()}${path.extname(file.originalname)}`),
   }),
   fileFilter: (req, file, cb) => {
     const allowed = ["image/jpeg", "image/png", "image/gif"];
@@ -75,47 +78,58 @@ const uploadMessageFile = multer({
   storage: multer.diskStorage({
     destination: (req, file, cb) => cb(null, messagesDir),
     filename: (req, file, cb) => {
-      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
       cb(null, `msg-${uniqueSuffix}${path.extname(file.originalname)}`);
     },
   }),
   fileFilter: (req, file, cb) => {
     const allowed = [
-      'image/jpeg', 'image/png', 'image/gif',
-      'application/pdf',
-      'application/msword', 
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'application/vnd.ms-excel', 
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'application/vnd.ms-powerpoint', 
-      'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+      "image/jpeg",
+      "image/png",
+      "image/gif",
+      "application/pdf",
+      "application/msword",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/vnd.ms-excel",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "application/vnd.ms-powerpoint",
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     ];
     if (allowed.includes(file.mimetype)) cb(null, true);
     else cb(new Error("Type de fichier non autorisé"));
   },
-  limits: { fileSize: 25 * 1024 * 1024 }
+  limits: { fileSize: 25 * 1024 * 1024 },
 });
 
 // Middleware d'authentification JWT
 const requireAuth = async (req, res, next) => {
   try {
-    const token = req.headers.authorization?.split(' ')[1];
+    const token = req.headers.authorization?.split(" ")[1];
     if (!token) {
-      return res.status(401).json({ success: false, message: "Authentification requise" });
+      return res
+        .status(401)
+        .json({ success: false, message: "Authentification requise" });
     }
 
     const decoded = jwt.verify(token, JWT_SECRET);
-    const [user] = await pool.query("SELECT id, name, email, avatar, status FROM users WHERE id = ?", [decoded.userId]);
-    
+    const [user] = await pool.query(
+      "SELECT id, name, email, avatar, status FROM users WHERE id = ?",
+      [decoded.userId]
+    );
+
     if (!user.length) {
-      return res.status(401).json({ success: false, message: "Utilisateur non trouvé" });
+      return res
+        .status(401)
+        .json({ success: false, message: "Utilisateur non trouvé" });
     }
 
     req.user = user[0];
     next();
   } catch (err) {
     console.error("Erreur vérification token:", err);
-    res.status(401).json({ success: false, message: "Token invalide ou expiré" });
+    res
+      .status(401)
+      .json({ success: false, message: "Token invalide ou expiré" });
   }
 };
 
@@ -130,8 +144,11 @@ io.use(async (socket, next) => {
     }
 
     const decoded = jwt.verify(token, JWT_SECRET);
-    const [user] = await pool.query("SELECT id, name, avatar, status FROM users WHERE id = ?", [decoded.userId]);
-    
+    const [user] = await pool.query(
+      "SELECT id, name, avatar, status FROM users WHERE id = ?",
+      [decoded.userId]
+    );
+
     if (!user.length) {
       return next(new Error("Utilisateur non trouvé"));
     }
@@ -145,102 +162,116 @@ io.use(async (socket, next) => {
 });
 
 // Gestion des événements Socket.io
-io.on('connection', async (socket) => {
+io.on("connection", async (socket) => {
   const userId = socket.user.id;
-  
+
   // Mettre à jour le statut de l'utilisateur
   onlineUsers.set(userId, socket.id);
-  await pool.query("UPDATE users SET status = 'En ligne' WHERE id = ?", [userId]);
-  io.emit('user-status-changed', { userId, status: 'En ligne' });
+  await pool.query("UPDATE users SET status = 'En ligne' WHERE id = ?", [
+    userId,
+  ]);
+  io.emit("user-status-changed", { userId, status: "En ligne" });
 
   // Gérer la déconnexion
-  socket.on('disconnect', async () => {
+  socket.on("disconnect", async () => {
     onlineUsers.delete(userId);
-    await pool.query("UPDATE users SET status = 'Hors ligne' WHERE id = ?", [userId]);
-    io.emit('user-status-changed', { userId, status: 'Hors ligne' });
+    await pool.query("UPDATE users SET status = 'Hors ligne' WHERE id = ?", [
+      userId,
+    ]);
+    io.emit("user-status-changed", { userId, status: "Hors ligne" });
   });
 
   // Envoi de message
-  socket.on('send-message', async ({ conversationId, content, fileData }, callback) => {
-    try {
-      const conn = await pool.getConnection();
-      
+  socket.on(
+    "send-message",
+    async ({ conversationId, content, fileData }, callback) => {
       try {
-        await conn.beginTransaction();
+        const conn = await pool.getConnection();
 
-        // Vérifier que l'utilisateur fait partie de la conversation
-        const [conversation] = await conn.query(
-          "SELECT user1_id, user2_id FROM conversations WHERE id = ?",
-          [conversationId]
-        );
-        
-        if (conversation.length === 0) {
-          throw new Error("Conversation non trouvée");
-        }
+        try {
+          await conn.beginTransaction();
 
-        const { user1_id, user2_id } = conversation[0];
-        if (user1_id !== userId && user2_id !== userId) {
-          throw new Error("Non autorisé");
-        }
+          // Vérifier que l'utilisateur fait partie de la conversation
+          const [conversation] = await conn.query(
+            "SELECT user1_id, user2_id FROM conversations WHERE id = ?",
+            [conversationId]
+          );
 
-        // Insérer le message
-        const messageContent = fileData ? JSON.stringify(fileData) : content;
-        const [result] = await conn.query(
-          "INSERT INTO messages (conversation_id, sender_id, content) VALUES (?, ?, ?)",
-          [conversationId, userId, messageContent]
-        );
+          if (conversation.length === 0) {
+            throw new Error("Conversation non trouvée");
+          }
 
-        // Mettre à jour la conversation avec le dernier message
-        await conn.query(
-          "UPDATE conversations SET last_message_id = ? WHERE id = ?",
-          [result.insertId, conversationId]
-        );
+          const { user1_id, user2_id } = conversation[0];
+          if (user1_id !== userId && user2_id !== userId) {
+            throw new Error("Non autorisé");
+          }
 
-        // Récupérer les détails complets du message
-        const [message] = await conn.query(`
+          // Insérer le message
+          const messageContent = fileData ? JSON.stringify(fileData) : content;
+          const [result] = await conn.query(
+            "INSERT INTO messages (conversation_id, sender_id, content) VALUES (?, ?, ?)",
+            [conversationId, userId, messageContent]
+          );
+
+          // Mettre à jour la conversation avec le dernier message
+          await conn.query(
+            "UPDATE conversations SET last_message_id = ? WHERE id = ?",
+            [result.insertId, conversationId]
+          );
+
+          // Récupérer les détails complets du message
+          const [message] = await conn.query(
+            `
           SELECT m.id, m.content, m.created_at, m.sender_id, 
                  u.name as sender_name, u.avatar as sender_avatar,
                  u.status as sender_status
           FROM messages m
           JOIN users u ON m.sender_id = u.id
           WHERE m.id = ?
-        `, [result.insertId]);
+        `,
+            [result.insertId]
+          );
 
-        await conn.commit();
+          await conn.commit();
 
-        // Préparer les données du message pour l'émission
-        const messageData = {
-          ...message[0],
-          conversationId,
-          is_read: false
-        };
+          // Préparer les données du message pour l'émission
+          const messageData = {
+            ...message[0],
+            conversationId,
+            is_read: false,
+          };
 
-        // Parser le contenu JSON si c'est un fichier
-        if (messageData.content && messageData.content.startsWith('{') && messageData.content.endsWith('}')) {
-          try {
-            const fileData = JSON.parse(messageData.content);
-            messageData.content = null;
-            messageData.fileUrl = fileData.fileUrl;
-            messageData.fileType = fileData.fileType;
-          } catch (err) {
-            console.error("Erreur parsing file data:", err);
+          // Parser le contenu JSON si c'est un fichier
+          if (
+            messageData.content &&
+            messageData.content.startsWith("{") &&
+            messageData.content.endsWith("}")
+          ) {
+            try {
+              const fileData = JSON.parse(messageData.content);
+              messageData.content = null;
+              messageData.fileUrl = fileData.fileUrl;
+              messageData.fileType = fileData.fileType;
+            } catch (err) {
+              console.error("Erreur parsing file data:", err);
+            }
           }
-        }
 
-        // Émettre le message aux participants de la conversation
-        const otherUserId = user1_id === userId ? user2_id : user1_id;
-        const recipientSocketId = onlineUsers.get(otherUserId);
-        
-        if (recipientSocketId) {
-          io.to(recipientSocketId).emit('new-message', messageData);
-          messageData.is_read = true;
-        }
+          // Émettre le message aux participants de la conversation
+          const otherUserId = user1_id === userId ? user2_id : user1_id;
+          const recipientSocketId = onlineUsers.get(otherUserId);
 
-        // Émettre aussi à l'expéditeur pour confirmation
-        socket.emit('message-sent', messageData);
+          if (recipientSocketId) {
+            io.to(recipientSocketId).emit("new-message", messageData);
+            messageData.is_read = true;
+          }
 
-        // Mettre à jour les conversations des deux utilisateurs
-        const [updatedConv] = await conn.query(`
+          // Émettre aussi à l'expéditeur pour confirmation
+          socket.emit("message-sent", messageData);
+
+          // Mettre à jour les conversations des deux utilisateurs
+          const [updatedConv] = await conn.query(
+            `
           SELECT c.id, 
                  CASE 
                    WHEN c.user1_id = ? THEN u2.id 
@@ -266,36 +297,44 @@ io.on('connection', async (socket) => {
           JOIN users u2 ON c.user2_id = u2.id
           LEFT JOIN messages m ON c.last_message_id = m.id
           WHERE c.id = ?
-        `, [userId, userId, userId, userId, userId, conversationId]);
+        `,
+            [userId, userId, userId, userId, userId, conversationId]
+          );
 
-        if (updatedConv.length > 0) {
-          const conversationUpdate = updatedConv[0];
-          
-          // Émettre la mise à jour de la conversation aux deux utilisateurs
-          io.to(socket.id).emit('conversation-updated', conversationUpdate);
-          if (recipientSocketId) {
-            io.to(recipientSocketId).emit('conversation-updated', {
-              ...conversationUpdate,
-              unread_count: recipientSocketId ? conversationUpdate.unread_count + 1 : 0
-            });
+          if (updatedConv.length > 0) {
+            const conversationUpdate = updatedConv[0];
+
+            // Émettre la mise à jour de la conversation aux deux utilisateurs
+            io.to(socket.id).emit("conversation-updated", conversationUpdate);
+            if (recipientSocketId) {
+              io.to(recipientSocketId).emit("conversation-updated", {
+                ...conversationUpdate,
+                unread_count: recipientSocketId
+                  ? conversationUpdate.unread_count + 1
+                  : 0,
+              });
+            }
           }
-        }
 
-        callback({ success: true, message: messageData });
+          callback({ success: true, message: messageData });
+        } catch (err) {
+          await conn.rollback();
+          throw err;
+        } finally {
+          conn.release();
+        }
       } catch (err) {
-        await conn.rollback();
-        throw err;
-      } finally {
-        conn.release();
+        console.error("Erreur envoi message via socket:", err);
+        callback({
+          success: false,
+          message: "Erreur lors de l'envoi du message",
+        });
       }
-    } catch (err) {
-      console.error("Erreur envoi message via socket:", err);
-      callback({ success: false, message: "Erreur lors de l'envoi du message" });
     }
-  });
+  );
 
   // Marquer les messages comme lus
-  socket.on('mark-as-read', async ({ conversationId }) => {
+  socket.on("mark-as-read", async ({ conversationId }) => {
     try {
       await pool.query(
         "UPDATE messages SET read_at = NOW() WHERE conversation_id = ? AND sender_id != ? AND read_at IS NULL",
@@ -303,7 +342,8 @@ io.on('connection', async (socket) => {
       );
 
       // Mettre à jour la conversation avec le nouveau nombre de messages non lus
-      const [conversation] = await pool.query(`
+      const [conversation] = await pool.query(
+        `
         SELECT c.id, 
                CASE 
                  WHEN c.user1_id = ? THEN u2.id 
@@ -329,16 +369,21 @@ io.on('connection', async (socket) => {
         JOIN users u2 ON c.user2_id = u2.id
         LEFT JOIN messages m ON c.last_message_id = m.id
         WHERE c.id = ?
-      `, [userId, userId, userId, userId, conversationId]);
+      `,
+        [userId, userId, userId, userId, conversationId]
+      );
 
       if (conversation.length > 0) {
-        socket.emit('conversation-updated', conversation[0]);
-        
+        socket.emit("conversation-updated", conversation[0]);
+
         // Informer l'autre utilisateur que ses messages ont été lus
         const otherUserId = conversation[0].other_user_id;
         const recipientSocketId = onlineUsers.get(otherUserId);
         if (recipientSocketId) {
-          io.to(recipientSocketId).emit('messages-read', { conversationId, readerId: userId });
+          io.to(recipientSocketId).emit("messages-read", {
+            conversationId,
+            readerId: userId,
+          });
         }
       }
     } catch (err) {
@@ -346,54 +391,60 @@ io.on('connection', async (socket) => {
     }
   });
 
+  // Nouvel événement pour les nouvelles conversations
+  socket.on("new-conversation-created", ({ conversationId }) => {
+    // Diffuser à tous les utilisateurs concernés
+    io.emit("conversation-created", { conversationId });
+  });
+
   // Événement pour les appels vocaux/vidéo
-  socket.on('call-user', ({ to, offer, callType }) => {
+  socket.on("call-user", ({ to, offer, callType }) => {
     const recipientSocketId = onlineUsers.get(to);
     if (recipientSocketId) {
-      io.to(recipientSocketId).emit('call-made', {
+      io.to(recipientSocketId).emit("call-made", {
         from: userId,
         offer,
         callType,
         callerName: socket.user.name,
-        callerAvatar: socket.user.avatar
+        callerAvatar: socket.user.avatar,
       });
     }
   });
 
-  socket.on('answer-call', ({ to, answer }) => {
+  socket.on("answer-call", ({ to, answer }) => {
     const recipientSocketId = onlineUsers.get(to);
     if (recipientSocketId) {
-      io.to(recipientSocketId).emit('call-answered', {
+      io.to(recipientSocketId).emit("call-answered", {
         from: userId,
-        answer
+        answer,
       });
     }
   });
 
-  socket.on('call-rejected', ({ to }) => {
+  socket.on("call-rejected", ({ to }) => {
     const recipientSocketId = onlineUsers.get(to);
     if (recipientSocketId) {
-      io.to(recipientSocketId).emit('call-rejected', {
-        from: userId
-      });
-    }
-  });
-
-  socket.on('end-call', ({ to }) => {
-    const recipientSocketId = onlineUsers.get(to);
-    if (recipientSocketId) {
-      io.to(recipientSocketId).emit('call-ended', {
-        from: userId
-      });
-    }
-  });
-
-  socket.on('ice-candidate', ({ to, candidate }) => {
-    const recipientSocketId = onlineUsers.get(to);
-    if (recipientSocketId) {
-      io.to(recipientSocketId).emit('ice-candidate', {
+      io.to(recipientSocketId).emit("call-rejected", {
         from: userId,
-        candidate
+      });
+    }
+  });
+
+  socket.on("end-call", ({ to }) => {
+    const recipientSocketId = onlineUsers.get(to);
+    if (recipientSocketId) {
+      io.to(recipientSocketId).emit("call-ended", {
+        from: userId,
+      });
+    }
+  });
+
+  socket.on("ice-candidate", ({ to, candidate }) => {
+    const recipientSocketId = onlineUsers.get(to);
+    if (recipientSocketId) {
+      io.to(recipientSocketId).emit("ice-candidate", {
+        from: userId,
+        candidate,
       });
     }
   });
@@ -401,9 +452,9 @@ io.on('connection', async (socket) => {
 
 // Routes API
 app.get("/api/check-auth", requireAuth, async (req, res) => {
-  res.json({ 
-    isAuthenticated: true, 
-    user: req.user
+  res.json({
+    isAuthenticated: true,
+    user: req.user,
   });
 });
 
@@ -412,53 +463,66 @@ app.post("/api/register", uploadAvatar.single("avatar"), async (req, res) => {
   const { name, email, password } = req.body;
   if (!name || !email || !password) {
     if (req.file) fs.unlinkSync(req.file.path);
-    return res.status(400).json({ success: false, message: "Tous les champs sont requis" });
+    return res
+      .status(400)
+      .json({ success: false, message: "Tous les champs sont requis" });
   }
 
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    const [existing] = await conn.query("SELECT id FROM users WHERE email = ?", [email]);
+    const [existing] = await conn.query(
+      "SELECT id FROM users WHERE email = ?",
+      [email]
+    );
     if (existing.length > 0) {
       if (req.file) fs.unlinkSync(req.file.path);
-      return res.status(409).json({ success: false, message: "Email déjà utilisé" });
+      return res
+        .status(409)
+        .json({ success: false, message: "Email déjà utilisé" });
     }
 
     const hashedPassword = await bcrypt.hash(password, 12);
-    const avatar = req.file ? `/uploads/avatars/${req.file.filename}` : "/uploads/avatars/default.jpg";
+    const avatar = req.file
+      ? `/uploads/avatars/${req.file.filename}`
+      : "/uploads/avatars/default.jpg";
 
     const [result] = await conn.query(
-      "INSERT INTO users (name, email, password, avatar, status, bio, phone, location) VALUES (?, ?, ?, ?, 'Hors ligne', '', '', '')", 
+      "INSERT INTO users (name, email, password, avatar, status, bio, phone, location) VALUES (?, ?, ?, ?, 'Hors ligne', '', '', '')",
       [name, email, hashedPassword, avatar]
     );
-    
+
     const newUser = {
       id: result.insertId,
       name,
       email,
       avatar,
-      status: 'Hors ligne'
+      status: "Hors ligne",
     };
 
     await conn.commit();
-    
+
     // Créer le token JWT
-    const token = jwt.sign({ userId: newUser.id }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+    const token = jwt.sign({ userId: newUser.id }, JWT_SECRET, {
+      expiresIn: JWT_EXPIRES_IN,
+    });
 
     // Notifier tous les utilisateurs de la nouvelle inscription
-    io.emit('new-user', newUser);
+    io.emit("new-user", newUser);
 
-    res.status(201).json({ 
-      success: true, 
+    res.status(201).json({
+      success: true,
       message: "Inscription réussie",
       token,
-      user: newUser
+      user: newUser,
     });
   } catch (err) {
     await conn.rollback();
     console.error("Erreur inscription:", err);
     if (req.file) fs.unlinkSync(req.file.path);
-    res.status(500).json({ success: false, message: "Erreur lors de l'inscription" });
+    res
+      .status(500)
+      .json({ success: false, message: "Erreur lors de l'inscription" });
   } finally {
     conn.release();
   }
@@ -467,44 +531,61 @@ app.post("/api/register", uploadAvatar.single("avatar"), async (req, res) => {
 // Connexion
 app.post("/api/login", async (req, res) => {
   const { email, password } = req.body;
-  if (!email || !password) return res.status(400).json({ success: false, message: "Email et mot de passe requis" });
+  if (!email || !password)
+    return res
+      .status(400)
+      .json({ success: false, message: "Email et mot de passe requis" });
 
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    const [rows] = await conn.query("SELECT * FROM users WHERE email = ?", [email]);
-    if (rows.length === 0) return res.status(401).json({ success: false, message: "Identifiants incorrects" });
+    const [rows] = await conn.query("SELECT * FROM users WHERE email = ?", [
+      email,
+    ]);
+    if (rows.length === 0)
+      return res
+        .status(401)
+        .json({ success: false, message: "Identifiants incorrects" });
 
     const user = rows[0];
     const validPass = await bcrypt.compare(password, user.password);
-    if (!validPass) return res.status(401).json({ success: false, message: "Identifiants incorrects" });
+    if (!validPass)
+      return res
+        .status(401)
+        .json({ success: false, message: "Identifiants incorrects" });
 
-    await conn.query("UPDATE users SET status = 'En ligne' WHERE id = ?", [user.id]);
+    await conn.query("UPDATE users SET status = 'En ligne' WHERE id = ?", [
+      user.id,
+    ]);
     await conn.commit();
 
     // Créer le token JWT
-    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+    const token = jwt.sign({ userId: user.id }, JWT_SECRET, {
+      expiresIn: JWT_EXPIRES_IN,
+    });
 
     const userData = {
       id: user.id,
       name: user.name,
       email: user.email,
       avatar: user.avatar,
-      status: "En ligne"
+      status: "En ligne",
     };
 
     // Notifier tous les utilisateurs du changement de statut
-    io.emit('user-status-changed', { userId: user.id, status: 'En ligne' });
+    io.emit("user-status-changed", { userId: user.id, status: "En ligne" });
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       token,
-      user: userData
+      user: userData,
     });
   } catch (err) {
     await conn.rollback();
     console.error("Erreur connexion:", err);
-    res.status(500).json({ success: false, message: "Erreur lors de la connexion" });
+    res
+      .status(500)
+      .json({ success: false, message: "Erreur lors de la connexion" });
   } finally {
     conn.release();
   }
@@ -515,16 +596,23 @@ app.post("/api/logout", requireAuth, async (req, res) => {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    await conn.query("UPDATE users SET status = 'Hors ligne' WHERE id = ?", [req.user.id]);
+    await conn.query("UPDATE users SET status = 'Hors ligne' WHERE id = ?", [
+      req.user.id,
+    ]);
     await conn.commit();
 
     // Notifier tous les utilisateurs du changement de statut
-    io.emit('user-status-changed', { userId: req.user.id, status: 'Hors ligne' });
+    io.emit("user-status-changed", {
+      userId: req.user.id,
+      status: "Hors ligne",
+    });
 
     res.json({ success: true, message: "Déconnexion réussie" });
   } catch (err) {
     await conn.rollback();
-    res.status(500).json({ success: false, message: "Erreur lors de la déconnexion" });
+    res
+      .status(500)
+      .json({ success: false, message: "Erreur lors de la déconnexion" });
   } finally {
     conn.release();
   }
@@ -534,10 +622,10 @@ app.post("/api/logout", requireAuth, async (req, res) => {
 app.get("/api/users", requireAuth, async (req, res) => {
   try {
     const [users] = await pool.query(
-      "SELECT id, name, avatar, status, bio, phone, location FROM users WHERE id != ? ORDER BY name ASC", 
+      "SELECT id, name, avatar, status, bio, phone, location FROM users WHERE id != ? ORDER BY name ASC",
       [req.user.id]
     );
-    
+
     res.json({ success: true, users });
   } catch (err) {
     console.error("Erreur liste utilisateurs:", err);
@@ -549,12 +637,14 @@ app.get("/api/users", requireAuth, async (req, res) => {
 app.get("/api/profile", requireAuth, async (req, res) => {
   try {
     const [rows] = await pool.query(
-      "SELECT id, name, email, avatar, status, bio, phone, location FROM users WHERE id = ?", 
+      "SELECT id, name, email, avatar, status, bio, phone, location FROM users WHERE id = ?",
       [req.user.id]
     );
-    
+
     if (rows.length === 0) {
-      return res.status(404).json({ success: false, message: "Utilisateur non trouvé" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Utilisateur non trouvé" });
     }
 
     const user = rows[0];
@@ -566,64 +656,75 @@ app.get("/api/profile", requireAuth, async (req, res) => {
 });
 
 // Mise à jour du profil
-app.put("/api/profile", requireAuth, uploadAvatar.single("avatar"), async (req, res) => {
-  const { name, bio, phone, location } = req.body;
-  const userId = req.user.id;
+app.put(
+  "/api/profile",
+  requireAuth,
+  uploadAvatar.single("avatar"),
+  async (req, res) => {
+    const { name, bio, phone, location } = req.body;
+    const userId = req.user.id;
 
-  const conn = await pool.getConnection();
-  try {
-    await conn.beginTransaction();
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
 
-    let avatar = req.user.avatar;
-    if (req.file) {
-      avatar = `/uploads/avatars/${req.file.filename}`;
-      if (req.user.avatar !== "/uploads/avatars/default.jpg") {
-        const oldAvatarPath = path.join(__dirname, req.user.avatar);
-        if (fs.existsSync(oldAvatarPath)) fs.unlinkSync(oldAvatarPath);
+      let avatar = req.user.avatar;
+      if (req.file) {
+        avatar = `/uploads/avatars/${req.file.filename}`;
+        if (req.user.avatar !== "/uploads/avatars/default.jpg") {
+          const oldAvatarPath = path.join(__dirname, req.user.avatar);
+          if (fs.existsSync(oldAvatarPath)) fs.unlinkSync(oldAvatarPath);
+        }
       }
+
+      await conn.query(
+        "UPDATE users SET name = ?, bio = ?, phone = ?, location = ?, avatar = ? WHERE id = ?",
+        [name, bio, phone, location, avatar, userId]
+      );
+
+      const updatedUser = {
+        id: userId,
+        name,
+        email: req.user.email,
+        avatar,
+        status: req.user.status,
+        bio,
+        phone,
+        location,
+      };
+
+      await conn.commit();
+
+      // Notifier tous les utilisateurs de la mise à jour du profil
+      io.emit("user-updated", updatedUser);
+
+      res.json({
+        success: true,
+        user: updatedUser,
+      });
+    } catch (err) {
+      await conn.rollback();
+      console.error("Erreur mise à jour profil:", err);
+      if (req.file) fs.unlinkSync(req.file.path);
+      res
+        .status(500)
+        .json({
+          success: false,
+          message: "Erreur lors de la mise à jour du profil",
+        });
+    } finally {
+      conn.release();
     }
-
-    await conn.query(
-      "UPDATE users SET name = ?, bio = ?, phone = ?, location = ?, avatar = ? WHERE id = ?",
-      [name, bio, phone, location, avatar, userId]
-    );
-
-    const updatedUser = {
-      id: userId,
-      name,
-      email: req.user.email,
-      avatar,
-      status: req.user.status,
-      bio,
-      phone,
-      location
-    };
-
-    await conn.commit();
-
-    // Notifier tous les utilisateurs de la mise à jour du profil
-    io.emit('user-updated', updatedUser);
-
-    res.json({ 
-      success: true, 
-      user: updatedUser
-    });
-  } catch (err) {
-    await conn.rollback();
-    console.error("Erreur mise à jour profil:", err);
-    if (req.file) fs.unlinkSync(req.file.path);
-    res.status(500).json({ success: false, message: "Erreur lors de la mise à jour du profil" });
-  } finally {
-    conn.release();
   }
-});
+);
 
 // Liste des conversations
 app.get("/api/conversations", requireAuth, async (req, res) => {
   try {
     const userId = req.user.id;
-    
-    const [conversations] = await pool.query(`
+
+    const [conversations] = await pool.query(
+      `
       SELECT c.id, 
              CASE 
                WHEN c.user1_id = ? THEN u2.id 
@@ -650,7 +751,9 @@ app.get("/api/conversations", requireAuth, async (req, res) => {
       LEFT JOIN messages m ON c.last_message_id = m.id
       WHERE c.user1_id = ? OR c.user2_id = ?
       ORDER BY m.created_at DESC
-    `, [userId, userId, userId, userId, userId, userId, userId]);
+    `,
+      [userId, userId, userId, userId, userId, userId, userId]
+    );
 
     res.json({ success: true, conversations });
   } catch (err) {
@@ -659,31 +762,40 @@ app.get("/api/conversations", requireAuth, async (req, res) => {
   }
 });
 
-// Récupérer ou créer une conversation
+// Récupérer ou créer une conversation (version optimisée)
+// Récupérer ou créer une conversation (version optimisée)
 app.get("/api/conversations/:otherUserId", requireAuth, async (req, res) => {
   try {
     const userId = req.user.id;
     const otherUserId = req.params.otherUserId;
 
-    const [existing] = await pool.query(`
-      SELECT id FROM conversations 
-      WHERE (user1_id = ? AND user2_id = ?) OR (user1_id = ? AND user2_id = ?)
-    `, [userId, otherUserId, otherUserId, userId]);
+    // Vérifier si la conversation existe déjà
+    const [existing] = await pool.query(
+      `SELECT id FROM conversations 
+       WHERE (user1_id = ? AND user2_id = ?) 
+          OR (user1_id = ? AND user2_id = ?)`,
+      [userId, otherUserId, otherUserId, userId]
+    );
 
     if (existing.length > 0) {
+      // Si la conversation existe, retourner l'ID
       return res.json({ success: true, conversationId: existing[0].id });
     }
 
+    // Créer une nouvelle conversation
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
+      
+      // Insérer la nouvelle conversation
       const [result] = await conn.query(
         "INSERT INTO conversations (user1_id, user2_id) VALUES (?, ?)",
         [userId, otherUserId]
       );
-      
-      // Récupérer les détails de la nouvelle conversation
-      const [newConversation] = await conn.query(`
+
+      // Récupérer les détails complets de la nouvelle conversation
+      const [newConversation] = await conn.query(
+        `
         SELECT c.id, 
                CASE 
                  WHEN c.user1_id = ? THEN u2.id 
@@ -708,33 +820,63 @@ app.get("/api/conversations/:otherUserId", requireAuth, async (req, res) => {
         JOIN users u1 ON c.user1_id = u1.id
         JOIN users u2 ON c.user2_id = u2.id
         WHERE c.id = ?
-      `, [userId, userId, userId, userId, result.insertId]);
+      `,
+        [userId, userId, userId, userId, result.insertId]
+      );
 
       await conn.commit();
-      
-      // Émettre l'événement aux deux utilisateurs
+
       const conversationData = newConversation[0];
       
-      // À l'utilisateur qui a initié la conversation
+      // Format standardisé pour l'émission
+      const conversationPayload = {
+        id: conversationData.id,
+        other_user_id: conversationData.other_user_id,
+        other_user_name: conversationData.other_user_name,
+        other_user_avatar: conversationData.other_user_avatar,
+        other_user_status: conversationData.other_user_status,
+        last_message: null,
+        last_message_time: new Date().toISOString(),
+        unread_count: 0,
+        isNew: true // Nouvelle propriété pour l'indicateur visuel
+      };
+
+      // Émettre à l'initiateur
       const initiatorSocketId = onlineUsers.get(userId);
       if (initiatorSocketId) {
-        io.to(initiatorSocketId).emit('new-conversation', conversationData);
-      }
-      
-      // À l'autre utilisateur
-      const otherUserSocketId = onlineUsers.get(otherUserId);
-      if (otherUserSocketId) {
-        io.to(otherUserSocketId).emit('new-conversation', {
-          ...conversationData,
-          // Inverser les données pour l'autre utilisateur
-          other_user_id: userId,
-          other_user_name: req.user.name,
-          other_user_avatar: req.user.avatar,
-          other_user_status: req.user.status
-        });
+        io.to(initiatorSocketId).emit('new-conversation', conversationPayload);
       }
 
-      res.json({ success: true, conversationId: result.insertId });
+      // Émettre à l'autre utilisateur (avec ses propres données)
+      const otherUserSocketId = onlineUsers.get(otherUserId);
+      if (otherUserSocketId) {
+        // Récupérer les infos de l'initiateur pour l'autre utilisateur
+        const [initiator] = await pool.query(
+          "SELECT id, name, avatar, status FROM users WHERE id = ?",
+          [userId]
+        );
+        
+        if (initiator.length > 0) {
+          io.to(otherUserSocketId).emit('new-conversation', {
+            id: conversationData.id,
+            other_user_id: initiator[0].id,
+            other_user_name: initiator[0].name,
+            other_user_avatar: initiator[0].avatar,
+            other_user_status: initiator[0].status,
+            last_message: null,
+            last_message_time: new Date().toISOString(),
+            unread_count: 0,
+            isNew: true
+          });
+        }
+      }
+
+      res.json({ 
+        success: true, 
+        conversationId: result.insertId,
+        conversation: conversationPayload
+      });
+
     } catch (err) {
       await conn.rollback();
       throw err;
@@ -743,7 +885,11 @@ app.get("/api/conversations/:otherUserId", requireAuth, async (req, res) => {
     }
   } catch (err) {
     console.error("Erreur récupération/conversation:", err);
-    res.status(500).json({ success: false, message: "Erreur serveur" });
+    res.status(500).json({ 
+      success: false, 
+      message: "Erreur serveur",
+      error: err.message 
+    });
   }
 });
 
@@ -753,7 +899,8 @@ app.get("/api/messages/:conversationId", requireAuth, async (req, res) => {
     const conversationId = req.params.conversationId;
     const userId = req.user.id;
 
-    const [messages] = await pool.query(`
+    const [messages] = await pool.query(
+      `
       SELECT 
         m.id, 
         m.conversation_id,
@@ -767,19 +914,21 @@ app.get("/api/messages/:conversationId", requireAuth, async (req, res) => {
       JOIN users u ON m.sender_id = u.id
       WHERE m.conversation_id = ?
       ORDER BY m.created_at ASC
-    `, [conversationId]);
+    `,
+      [conversationId]
+    );
 
     // Parser le contenu JSON pour les messages avec fichiers
-    const parsedMessages = messages.map(msg => {
+    const parsedMessages = messages.map((msg) => {
       try {
         const content = msg.content;
-        if (content && content.startsWith('{') && content.endsWith('}')) {
+        if (content && content.startsWith("{") && content.endsWith("}")) {
           const fileData = JSON.parse(content);
           return {
             ...msg,
             content: null,
             fileUrl: fileData.fileUrl,
-            fileType: fileData.fileType
+            fileType: fileData.fileType,
           };
         }
         return msg;
@@ -802,86 +951,98 @@ app.get("/api/messages/:conversationId", requireAuth, async (req, res) => {
 });
 
 // Upload de fichiers pour les messages
-app.post("/api/messages/upload", requireAuth, uploadMessageFile.single("file"), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ success: false, message: "Aucun fichier fourni" });
-  }
-
-  const { conversationId } = req.body;
-  const userId = req.user.id;
-  const fileUrl = `/uploads/messages/${req.file.filename}`;
-  const fileType = req.file.mimetype;
-
-  // Stocker le chemin du fichier dans le contenu du message
-  const content = JSON.stringify({ fileUrl, fileType });
-
-  const conn = await pool.getConnection();
-  try {
-    await conn.beginTransaction();
-
-    // Vérifier que l'utilisateur fait partie de la conversation
-    const [conversation] = await conn.query(
-      "SELECT user1_id, user2_id FROM conversations WHERE id = ? AND (user1_id = ? OR user2_id = ?)",
-      [conversationId, userId, userId]
-    );
-    
-    if (conversation.length === 0) {
-      fs.unlinkSync(req.file.path);
-      return res.status(403).json({ success: false, message: "Non autorisé" });
+app.post(
+  "/api/messages/upload",
+  requireAuth,
+  uploadMessageFile.single("file"),
+  async (req, res) => {
+    if (!req.file) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Aucun fichier fourni" });
     }
 
-    const { user1_id, user2_id } = conversation[0];
-    const otherUserId = user1_id === userId ? user2_id : user1_id;
+    const { conversationId } = req.body;
+    const userId = req.user.id;
+    const fileUrl = `/uploads/messages/${req.file.filename}`;
+    const fileType = req.file.mimetype;
 
-    // Insérer le message
-    const [result] = await conn.query(
-      "INSERT INTO messages (conversation_id, sender_id, content) VALUES (?, ?, ?)",
-      [conversationId, userId, content]
-    );
+    // Stocker le chemin du fichier dans le contenu du message
+    const content = JSON.stringify({ fileUrl, fileType });
 
-    // Mettre à jour la conversation avec le dernier message
-    await conn.query(
-      "UPDATE conversations SET last_message_id = ? WHERE id = ?",
-      [result.insertId, conversationId]
-    );
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
 
-    // Récupérer les détails complets du message
-    const [message] = await conn.query(`
+      // Vérifier que l'utilisateur fait partie de la conversation
+      const [conversation] = await conn.query(
+        "SELECT user1_id, user2_id FROM conversations WHERE id = ? AND (user1_id = ? OR user2_id = ?)",
+        [conversationId, userId, userId]
+      );
+
+      if (conversation.length === 0) {
+        fs.unlinkSync(req.file.path);
+        return res
+          .status(403)
+          .json({ success: false, message: "Non autorisé" });
+      }
+
+      const { user1_id, user2_id } = conversation[0];
+      const otherUserId = user1_id === userId ? user2_id : user1_id;
+
+      // Insérer le message
+      const [result] = await conn.query(
+        "INSERT INTO messages (conversation_id, sender_id, content) VALUES (?, ?, ?)",
+        [conversationId, userId, content]
+      );
+
+      // Mettre à jour la conversation avec le dernier message
+      await conn.query(
+        "UPDATE conversations SET last_message_id = ? WHERE id = ?",
+        [result.insertId, conversationId]
+      );
+
+      // Récupérer les détails complets du message
+      const [message] = await conn.query(
+        `
       SELECT m.id, m.content, m.created_at, m.sender_id, 
              u.name as sender_name, u.avatar as sender_avatar,
              u.status as sender_status
       FROM messages m
       JOIN users u ON m.sender_id = u.id
       WHERE m.id = ?
-    `, [result.insertId]);
+    `,
+        [result.insertId]
+      );
 
-    await conn.commit();
+      await conn.commit();
 
-    // Préparer les données du message pour l'émission
-    const messageData = {
-      ...message[0],
-      content: null,
-      fileUrl,
-      fileType,
-      conversationId,
-      is_read: false
-    };
+      // Préparer les données du message pour l'émission
+      const messageData = {
+        ...message[0],
+        content: null,
+        fileUrl,
+        fileType,
+        conversationId,
+        is_read: false,
+      };
 
-    // Émettre le message via Socket.io
-    const recipientSocketId = onlineUsers.get(otherUserId);
-    if (recipientSocketId) {
-      io.to(recipientSocketId).emit('new-message', messageData);
-      messageData.is_read = true;
-    }
+      // Émettre le message via Socket.io
+      const recipientSocketId = onlineUsers.get(otherUserId);
+      if (recipientSocketId) {
+        io.to(recipientSocketId).emit("new-message", messageData);
+        messageData.is_read = true;
+      }
 
-    // Émettre aussi à l'expéditeur pour confirmation
-    const senderSocketId = onlineUsers.get(userId);
-    if (senderSocketId) {
-      io.to(senderSocketId).emit('message-sent', messageData);
-    }
+      // Émettre aussi à l'expéditeur pour confirmation
+      const senderSocketId = onlineUsers.get(userId);
+      if (senderSocketId) {
+        io.to(senderSocketId).emit("message-sent", messageData);
+      }
 
-    // Mettre à jour les conversations des deux utilisateurs
-    const [updatedConv] = await conn.query(`
+      // Mettre à jour les conversations des deux utilisateurs
+      const [updatedConv] = await conn.query(
+        `
       SELECT c.id, 
              CASE 
                WHEN c.user1_id = ? THEN u2.id 
@@ -907,36 +1068,46 @@ app.post("/api/messages/upload", requireAuth, uploadMessageFile.single("file"), 
       JOIN users u2 ON c.user2_id = u2.id
       LEFT JOIN messages m ON c.last_message_id = m.id
       WHERE c.id = ?
-    `, [userId, userId, userId, userId, userId, conversationId]);
+    `,
+        [userId, userId, userId, userId, userId, conversationId]
+      );
 
-    if (updatedConv.length > 0) {
-      const conversationUpdate = updatedConv[0];
-      
-      // Émettre la mise à jour de la conversation aux deux utilisateurs
-      if (senderSocketId) {
-        io.to(senderSocketId).emit('conversation-updated', conversationUpdate);
+      if (updatedConv.length > 0) {
+        const conversationUpdate = updatedConv[0];
+
+        // Émettre la mise à jour de la conversation aux deux utilisateurs
+        if (senderSocketId) {
+          io.to(senderSocketId).emit(
+            "conversation-updated",
+            conversationUpdate
+          );
+        }
+        if (recipientSocketId) {
+          io.to(recipientSocketId).emit("conversation-updated", {
+            ...conversationUpdate,
+            unread_count: recipientSocketId
+              ? conversationUpdate.unread_count + 1
+              : 0,
+          });
+        }
       }
-      if (recipientSocketId) {
-        io.to(recipientSocketId).emit('conversation-updated', {
-          ...conversationUpdate,
-          unread_count: recipientSocketId ? conversationUpdate.unread_count + 1 : 0
-        });
-      }
+
+      res.json({
+        success: true,
+        message: messageData,
+      });
+    } catch (err) {
+      await conn.rollback();
+      if (req.file) fs.unlinkSync(req.file.path);
+      console.error("Erreur upload fichier:", err);
+      res
+        .status(500)
+        .json({ success: false, message: "Erreur lors de l'envoi du fichier" });
+    } finally {
+      conn.release();
     }
-
-    res.json({ 
-      success: true, 
-      message: messageData
-    });
-  } catch (err) {
-    await conn.rollback();
-    if (req.file) fs.unlinkSync(req.file.path);
-    console.error("Erreur upload fichier:", err);
-    res.status(500).json({ success: false, message: "Erreur lors de l'envoi du fichier" });
-  } finally {
-    conn.release();
   }
-});
+);
 
 // Démarrer le serveur
 server.listen(PORT, () => {
@@ -944,10 +1115,10 @@ server.listen(PORT, () => {
 });
 
 // Gestion des erreurs non capturées
-process.on('unhandledRejection', (err) => {
-  console.error('Unhandled Rejection:', err);
+process.on("unhandledRejection", (err) => {
+  console.error("Unhandled Rejection:", err);
 });
 
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught Exception:", err);
 });
