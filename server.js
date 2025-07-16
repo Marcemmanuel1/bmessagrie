@@ -448,6 +448,117 @@ io.on("connection", async (socket) => {
       });
     }
   });
+
+  socket.on(
+    "send-group-message",
+    async ({ groupId, content }, callback) => {
+      try {
+        const userId = socket.user.id;
+
+        // Vérifier que l'utilisateur est membre du groupe
+        const [isMember] = await pool.query(
+          "SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?",
+          [groupId, userId]
+        );
+
+        if (isMember.length === 0) {
+          throw new Error("Non autorisé");
+        }
+
+        const conn = await pool.getConnection();
+        try {
+          await conn.beginTransaction();
+
+          // Insérer le message
+          const [result] = await conn.query(
+            "INSERT INTO group_messages (group_id, sender_id, content) VALUES (?, ?, ?)",
+            [groupId, userId, content]
+          );
+
+          // Récupérer les détails complets du message
+          const [message] = await conn.query(
+            `
+            SELECT gm.id, gm.content, gm.created_at, gm.sender_id, 
+                   u.name as sender_name, u.avatar as sender_avatar
+            FROM group_messages gm
+            JOIN users u ON gm.sender_id = u.id
+            WHERE gm.id = ?
+          `,
+            [result.insertId]
+          );
+
+          // Récupérer les membres du groupe
+          const [members] = await conn.query(
+            "SELECT user_id FROM group_members WHERE group_id = ?",
+            [groupId]
+          );
+
+          await conn.commit();
+
+          // Préparer les données du message pour l'émission
+          const messageData = {
+            ...message[0],
+            groupId,
+          };
+
+          // Émettre le message aux membres du groupe
+          members.forEach((member) => {
+            const recipientSocketId = onlineUsers.get(member.user_id);
+            if (recipientSocketId) {
+              io.to(recipientSocketId).emit("new-group-message", messageData);
+            }
+          });
+
+          callback({ success: true, message: messageData });
+        } catch (err) {
+          await conn.rollback();
+          throw err;
+        } finally {
+          conn.release();
+        }
+      } catch (err) {
+        console.error("Erreur envoi message groupe via socket:", err);
+        callback({
+          success: false,
+          message: "Erreur lors de l'envoi du message",
+        });
+      }
+    }
+  );
+
+  // Marquer les messages de groupe comme lus
+  socket.on("mark-group-messages-as-read", async ({ groupId }) => {
+    try {
+      await pool.query(
+        "UPDATE group_messages SET read_at = NOW() WHERE group_id = ? AND sender_id != ? AND read_at IS NULL",
+        [groupId, socket.user.id]
+      );
+
+      // Mettre à jour le groupe avec le nouveau nombre de messages non lus
+      const [group] = await pool.query(
+        `
+        SELECT g.id, g.name, g.description, g.created_by, 
+               u.name as created_by_name, u.avatar as created_by_avatar,
+               COUNT(gm.user_id) as member_count,
+               (SELECT content FROM group_messages WHERE group_id = g.id ORDER BY created_at DESC LIMIT 1) as last_message,
+               (SELECT created_at FROM group_messages WHERE group_id = g.id ORDER BY created_at DESC LIMIT 1) as last_message_time,
+               0 as unread_count
+        FROM groups g
+        JOIN group_members gm ON g.id = gm.group_id
+        JOIN users u ON g.created_by = u.id
+        WHERE g.id = ? AND gm.user_id = ?
+        GROUP BY g.id
+      `,
+        [groupId, socket.user.id]
+      );
+
+      if (group.length > 0) {
+        socket.emit("group-updated", group[0]);
+      }
+    } catch (err) {
+      console.error("Erreur marquage messages groupe comme lus:", err);
+    }
+  });
 });
 
 // Routes API
@@ -615,6 +726,556 @@ app.post("/api/logout", requireAuth, async (req, res) => {
       .json({ success: false, message: "Erreur lors de la déconnexion" });
   } finally {
     conn.release();
+  }
+});
+app.post("/api/groups", requireAuth, async (req, res) => {
+  const { name, description, members } = req.body;
+  const userId = req.user.id;
+
+  if (!name || !members || !Array.isArray(members)) {
+    return res.status(400).json({
+      success: false,
+      message: "Nom du groupe et membres sont requis",
+    });
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // Créer le groupe
+    const [groupResult] = await conn.query(
+      "INSERT INTO groups (name, description, created_by) VALUES (?, ?, ?)",
+      [name, description || null, userId]
+    );
+
+    const groupId = groupResult.insertId;
+
+    // Ajouter le créateur comme admin
+    await conn.query(
+      "INSERT INTO group_members (group_id, user_id, is_admin) VALUES (?, ?, TRUE)",
+      [groupId, userId]
+    );
+
+    // Ajouter les autres membres
+    const membersToAdd = members.filter((m) => m !== userId);
+    if (membersToAdd.length > 0) {
+      const values = membersToAdd.map((memberId) => [groupId, memberId]);
+      await conn.query(
+        "INSERT INTO group_members (group_id, user_id) VALUES ?",
+        [values]
+      );
+    }
+
+    // Récupérer les détails complets du groupe
+    const [group] = await conn.query(
+      `
+      SELECT g.id, g.name, g.description, g.created_by, 
+             u.name as created_by_name, u.avatar as created_by_avatar,
+             COUNT(gm.user_id) as member_count
+      FROM groups g
+      JOIN users u ON g.created_by = u.id
+      LEFT JOIN group_members gm ON g.id = gm.group_id
+      WHERE g.id = ?
+      GROUP BY g.id
+    `,
+      [groupId]
+    );
+
+    await conn.commit();
+
+    // Notifier les membres du nouveau groupe
+    const allMembers = [...membersToAdd, userId];
+    allMembers.forEach((memberId) => {
+      const socketId = onlineUsers.get(memberId);
+      if (socketId) {
+        io.to(socketId).emit("new-group", group[0]);
+      }
+    });
+
+    res.json({ success: true, group: group[0] });
+  } catch (err) {
+    await conn.rollback();
+    console.error("Erreur création groupe:", err);
+    res.status(500).json({
+      success: false,
+      message: "Erreur lors de la création du groupe",
+    });
+  } finally {
+    conn.release();
+  }
+});
+
+// Lister les groupes d'un utilisateur
+app.get("/api/groups", requireAuth, async (req, res) => {
+  try {
+    const [groups] = await pool.query(
+      `
+      SELECT g.id, g.name, g.description, g.created_by, 
+             u.name as created_by_name, u.avatar as created_by_avatar,
+             COUNT(gm.user_id) as member_count,
+             (SELECT content FROM group_messages WHERE group_id = g.id ORDER BY created_at DESC LIMIT 1) as last_message,
+             (SELECT created_at FROM group_messages WHERE group_id = g.id ORDER BY created_at DESC LIMIT 1) as last_message_time,
+             (SELECT COUNT(*) FROM group_messages WHERE group_id = g.id AND sender_id != ? AND read_at IS NULL) as unread_count
+      FROM groups g
+      JOIN group_members gm ON g.id = gm.group_id
+      JOIN users u ON g.created_by = u.id
+      WHERE gm.user_id = ?
+      GROUP BY g.id
+      ORDER BY last_message_time DESC
+    `,
+      [req.user.id, req.user.id]
+    );
+
+    res.json({ success: true, groups });
+  } catch (err) {
+    console.error("Erreur liste groupes:", err);
+    res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+});
+
+// Obtenir les détails d'un groupe
+app.get("/api/groups/:groupId", requireAuth, async (req, res) => {
+  try {
+    const [group] = await pool.query(
+      `
+      SELECT g.id, g.name, g.description, g.created_by, 
+             u.name as created_by_name, u.avatar as created_by_avatar,
+             COUNT(gm.user_id) as member_count,
+             MAX(gm.is_admin = 1 AND gm.user_id = ?) as is_admin
+      FROM groups g
+      JOIN group_members gm ON g.id = gm.group_id
+      JOIN users u ON g.created_by = u.id
+      WHERE g.id = ? AND gm.user_id = ?
+      GROUP BY g.id
+    `,
+      [req.user.id, req.params.groupId, req.user.id]
+    );
+
+    if (group.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Groupe non trouvé ou accès refusé" });
+    }
+
+    // Récupérer les membres
+    const [members] = await pool.query(
+      `
+      SELECT u.id, u.name, u.avatar, u.status, gm.is_admin
+      FROM group_members gm
+      JOIN users u ON gm.user_id = u.id
+      WHERE gm.group_id = ?
+      ORDER BY gm.is_admin DESC, u.name ASC
+    `,
+      [req.params.groupId]
+    );
+
+    res.json({
+      success: true,
+      group: { ...group[0], members },
+    });
+  } catch (err) {
+    console.error("Erreur détails groupe:", err);
+    res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+});
+
+// Quitter un groupe
+app.post("/api/groups/:groupId/leave", requireAuth, async (req, res) => {
+  try {
+    const groupId = req.params.groupId;
+    const userId = req.user.id;
+
+    // Vérifier si l'utilisateur est le créateur
+    const [group] = await pool.query(
+      "SELECT created_by FROM groups WHERE id = ?",
+      [groupId]
+    );
+
+    if (group.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Groupe non trouvé" });
+    }
+
+    if (group[0].created_by === userId) {
+      return res.status(400).json({
+        success: false,
+        message: "Le créateur ne peut pas quitter le groupe. Supprimez-le à la place.",
+      });
+    }
+
+    // Supprimer l'utilisateur du groupe
+    await pool.query(
+      "DELETE FROM group_members WHERE group_id = ? AND user_id = ?",
+      [groupId, userId]
+    );
+
+    // Notifier les autres membres
+    const [members] = await pool.query(
+      "SELECT user_id FROM group_members WHERE group_id = ?",
+      [groupId]
+    );
+
+    members.forEach((member) => {
+      const socketId = onlineUsers.get(member.user_id);
+      if (socketId) {
+        io.to(socketId).emit("group-member-left", {
+          groupId,
+          userId,
+        });
+      }
+    });
+
+    res.json({ success: true, message: "Vous avez quitté le groupe" });
+  } catch (err) {
+    console.error("Erreur quitter groupe:", err);
+    res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+});
+
+// Supprimer un groupe
+app.delete("/api/groups/:groupId", requireAuth, async (req, res) => {
+  try {
+    const groupId = req.params.groupId;
+    const userId = req.user.id;
+
+    // Vérifier si l'utilisateur est le créateur
+    const [group] = await pool.query(
+      "SELECT created_by FROM groups WHERE id = ?",
+      [groupId]
+    );
+
+    if (group.length === 0) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Groupe non trouvé" });
+    }
+
+    if (group[0].created_by !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: "Seul le créateur peut supprimer le groupe",
+      });
+    }
+
+    // Supprimer le groupe (les contraintes de clé étrangère supprimeront les membres et messages)
+    await pool.query("DELETE FROM groups WHERE id = ?", [groupId]);
+
+    // Notifier tous les membres
+    const [members] = await pool.query(
+      "SELECT user_id FROM group_members WHERE group_id = ?",
+      [groupId]
+    );
+
+    members.forEach((member) => {
+      const socketId = onlineUsers.get(member.user_id);
+      if (socketId) {
+        io.to(socketId).emit("group-deleted", { groupId });
+      }
+    });
+
+    res.json({ success: true, message: "Groupe supprimé avec succès" });
+  } catch (err) {
+    console.error("Erreur suppression groupe:", err);
+    res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+});
+
+// Ajouter des membres à un groupe
+app.post("/api/groups/:groupId/members", requireAuth, async (req, res) => {
+  const { members } = req.body;
+  const groupId = req.params.groupId;
+  const userId = req.user.id;
+
+  if (!members || !Array.isArray(members)) {
+    return res
+      .status(400)
+      .json({ success: false, message: "Liste des membres requise" });
+  }
+
+  // Vérifier si l'utilisateur est admin du groupe
+  const [isAdmin] = await pool.query(
+    "SELECT is_admin FROM group_members WHERE group_id = ? AND user_id = ?",
+    [groupId, userId]
+  );
+
+  if (isAdmin.length === 0 || !isAdmin[0].is_admin) {
+    return res.status(403).json({
+      success: false,
+      message: "Seuls les administrateurs peuvent ajouter des membres",
+    });
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // Filtrer les membres déjà dans le groupe
+    const [existingMembers] = await conn.query(
+      "SELECT user_id FROM group_members WHERE group_id = ? AND user_id IN (?)",
+      [groupId, members]
+    );
+
+    const existingMemberIds = existingMembers.map((m) => m.user_id);
+    const newMembers = members.filter((m) => !existingMemberIds.includes(m));
+
+    if (newMembers.length > 0) {
+      const values = newMembers.map((memberId) => [groupId, memberId]);
+      await conn.query(
+        "INSERT INTO group_members (group_id, user_id) VALUES ?",
+        [values]
+      );
+    }
+
+    // Récupérer les détails des nouveaux membres
+    const [addedMembers] = await conn.query(
+      "SELECT id, name, avatar, status FROM users WHERE id IN (?)",
+      [newMembers]
+    );
+
+    await conn.commit();
+
+    // Notifier tous les membres du groupe
+    const [allMembers] = await conn.query(
+      "SELECT user_id FROM group_members WHERE group_id = ?",
+      [groupId]
+    );
+
+    allMembers.forEach((member) => {
+      const socketId = onlineUsers.get(member.user_id);
+      if (socketId) {
+        io.to(socketId).emit("group-members-added", {
+          groupId,
+          members: addedMembers,
+        });
+      }
+    });
+
+    // Notifier les nouveaux membres
+    newMembers.forEach((memberId) => {
+      const socketId = onlineUsers.get(memberId);
+      if (socketId) {
+        io.to(socketId).emit("added-to-group", { groupId });
+      }
+    });
+
+    res.json({
+      success: true,
+      message: "Membres ajoutés avec succès",
+      addedMembers,
+    });
+  } catch (err) {
+    await conn.rollback();
+    console.error("Erreur ajout membres:", err);
+    res.status(500).json({
+      success: false,
+      message: "Erreur lors de l'ajout des membres",
+    });
+  } finally {
+    conn.release();
+  }
+});
+
+// Supprimer un membre d'un groupe
+app.delete(
+  "/api/groups/:groupId/members/:memberId",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const { groupId, memberId } = req.params;
+      const userId = req.user.id;
+
+      // Vérifier si l'utilisateur est admin ou s'il se supprime lui-même
+      const [isAdmin] = await pool.query(
+        "SELECT is_admin FROM group_members WHERE group_id = ? AND user_id = ?",
+        [groupId, userId]
+      );
+
+      if (isAdmin.length === 0) {
+        return res.status(403).json({
+          success: false,
+          message: "Vous n'êtes pas membre de ce groupe",
+        });
+      }
+
+      if (memberId !== userId && !isAdmin[0].is_admin) {
+        return res.status(403).json({
+          success: false,
+          message: "Seuls les administrateurs peuvent supprimer des membres",
+        });
+      }
+
+      // Vérifier si le membre à supprimer est le créateur
+      const [group] = await pool.query(
+        "SELECT created_by FROM groups WHERE id = ?",
+        [groupId]
+      );
+
+      if (group.length > 0 && group[0].created_by == memberId) {
+        return res.status(400).json({
+          success: false,
+          message: "Le créateur ne peut pas être supprimé du groupe",
+        });
+      }
+
+      // Supprimer le membre
+      await pool.query(
+        "DELETE FROM group_members WHERE group_id = ? AND user_id = ?",
+        [groupId, memberId]
+      );
+
+      // Notifier tous les membres du groupe
+      const [members] = await pool.query(
+        "SELECT user_id FROM group_members WHERE group_id = ?",
+        [groupId]
+      );
+
+      members.forEach((member) => {
+        const socketId = onlineUsers.get(member.user_id);
+        if (socketId) {
+          io.to(socketId).emit("group-member-removed", {
+            groupId,
+            memberId,
+          });
+        }
+      });
+
+      // Notifier le membre supprimé
+      const removedSocketId = onlineUsers.get(memberId);
+      if (removedSocketId) {
+        io.to(removedSocketId).emit("removed-from-group", { groupId });
+      }
+
+      res.json({ success: true, message: "Membre supprimé du groupe" });
+    } catch (err) {
+      console.error("Erreur suppression membre:", err);
+      res.status(500).json({ success: false, message: "Erreur serveur" });
+    }
+  }
+);
+
+// Messages de groupe
+app.get("/api/groups/:groupId/messages", requireAuth, async (req, res) => {
+  try {
+    const groupId = req.params.groupId;
+    const userId = req.user.id;
+
+    // Vérifier que l'utilisateur est membre du groupe
+    const [isMember] = await pool.query(
+      "SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?",
+      [groupId, userId]
+    );
+
+    if (isMember.length === 0) {
+      return res
+        .status(403)
+        .json({ success: false, message: "Accès refusé" });
+    }
+
+    const [messages] = await pool.query(
+      `
+      SELECT gm.id, gm.content, gm.created_at, gm.sender_id, 
+             u.name as sender_name, u.avatar as sender_avatar
+      FROM group_messages gm
+      JOIN users u ON gm.sender_id = u.id
+      WHERE gm.group_id = ?
+      ORDER BY gm.created_at ASC
+    `,
+      [groupId]
+    );
+
+    // Marquer les messages comme lus
+    await pool.query(
+      "UPDATE group_messages SET read_at = NOW() WHERE group_id = ? AND sender_id != ? AND read_at IS NULL",
+      [groupId, userId]
+    );
+
+    res.json({ success: true, messages });
+  } catch (err) {
+    console.error("Erreur récupération messages groupe:", err);
+    res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+});
+
+// Envoyer un message dans un groupe
+app.post("/api/groups/:groupId/messages", requireAuth, async (req, res) => {
+  try {
+    const groupId = req.params.groupId;
+    const { content } = req.body;
+    const userId = req.user.id;
+
+    if (!content) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Contenu du message requis" });
+    }
+
+    // Vérifier que l'utilisateur est membre du groupe
+    const [isMember] = await pool.query(
+      "SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?",
+      [groupId, userId]
+    );
+
+    if (isMember.length === 0) {
+      return res
+        .status(403)
+        .json({ success: false, message: "Accès refusé" });
+    }
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      // Insérer le message
+      const [result] = await conn.query(
+        "INSERT INTO group_messages (group_id, sender_id, content) VALUES (?, ?, ?)",
+        [groupId, userId, content]
+      );
+
+      // Récupérer les détails complets du message
+      const [message] = await conn.query(
+        `
+        SELECT gm.id, gm.content, gm.created_at, gm.sender_id, 
+               u.name as sender_name, u.avatar as sender_avatar
+        FROM group_messages gm
+        JOIN users u ON gm.sender_id = u.id
+        WHERE gm.id = ?
+      `,
+        [result.insertId]
+      );
+
+      // Récupérer les membres du groupe (sauf l'expéditeur)
+      const [members] = await conn.query(
+        "SELECT user_id FROM group_members WHERE group_id = ? AND user_id != ?",
+        [groupId, userId]
+      );
+
+      await conn.commit();
+
+      // Émettre le message aux membres du groupe via Socket.io
+      const messageData = {
+        ...message[0],
+        groupId,
+      };
+
+      members.forEach((member) => {
+        const socketId = onlineUsers.get(member.user_id);
+        if (socketId) {
+          io.to(socketId).emit("new-group-message", messageData);
+        }
+      });
+
+      res.json({ success: true, message: messageData });
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  } catch (err) {
+    console.error("Erreur envoi message groupe:", err);
+    res.status(500).json({ success: false, message: "Erreur serveur" });
   }
 });
 
@@ -949,6 +1610,9 @@ app.get("/api/messages/:conversationId", requireAuth, async (req, res) => {
     res.status(500).json({ success: false, message: "Erreur serveur" });
   }
 });
+
+
+
 
 // Upload de fichiers pour les messages
 app.post(
