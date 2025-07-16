@@ -728,6 +728,8 @@ app.post("/api/logout", requireAuth, async (req, res) => {
     conn.release();
   }
 });
+
+// Création de groupe
 app.post("/api/groups", requireAuth, async (req, res) => {
   const { name, description, members } = req.body;
   const userId = req.user.id;
@@ -1423,8 +1425,7 @@ app.get("/api/conversations", requireAuth, async (req, res) => {
   }
 });
 
-// Récupérer ou créer une conversation (version optimisée)
-// Récupérer ou créer une conversation (version optimisée)
+// Récupérer ou créer une conversation
 app.get("/api/conversations/:otherUserId", requireAuth, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -1499,7 +1500,7 @@ app.get("/api/conversations/:otherUserId", requireAuth, async (req, res) => {
         last_message: null,
         last_message_time: new Date().toISOString(),
         unread_count: 0,
-        isNew: true // Nouvelle propriété pour l'indicateur visuel
+        isNew: true
       };
 
       // Émettre à l'initiateur
@@ -1610,9 +1611,6 @@ app.get("/api/messages/:conversationId", requireAuth, async (req, res) => {
     res.status(500).json({ success: false, message: "Erreur serveur" });
   }
 });
-
-
-
 
 // Upload de fichiers pour les messages
 app.post(
