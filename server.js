@@ -13,22 +13,22 @@ const app = express();
 const server = http.createServer(app);
 const io = socketio(server, {
   cors: {
-    origin: ["https://nexuchat.onrender.com", "http://127.0.0.1:5173"],
+    origin: ["https://nexuchat.onrender.com"],
     methods: ["GET", "POST"],
     credentials: true,
   },
 });
 
-const PORT = 5000;
-const JWT_SECRET = "votre_clé_secrète_jwt_très_complexe";
+const PORT = process.env.PORT || 5000;
+const JWT_SECRET = process.env.JWT_SECRET || "votre_clé_secrète_jwt_très_complexe";
 const JWT_EXPIRES_IN = "24h";
 
 // Configuration de la base de données
 const pool = mysql.createPool({
-  host: "mysql-nexuchat.alwaysdata.net",
-  user: "nexuchat",
-  password: "Goldegelil@1",
-  database: "nexuchat_messagerieapp",
+  host: process.env.DB_HOST || "mysql-nexuchat.alwaysdata.net",
+  user: process.env.DB_USER || "nexuchat",
+  password: process.env.DB_PASSWORD || "Goldegelil@1",
+  database: process.env.DB_NAME || "nexuchat_messagerieapp",
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
@@ -37,7 +37,7 @@ const pool = mysql.createPool({
 // Middlewares
 app.use(
   cors({
-    origin: ["https://nexuchat.onrender.com", "http://127.0.0.1:5173"],
+    origin: ["https://nexuchat.onrender.com"],
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization"],
@@ -222,13 +222,13 @@ io.on("connection", async (socket) => {
           // Récupérer les détails complets du message
           const [message] = await conn.query(
             `
-          SELECT m.id, m.content, m.created_at, m.sender_id, 
-                 u.name as sender_name, u.avatar as sender_avatar,
-                 u.status as sender_status
-          FROM messages m
-          JOIN users u ON m.sender_id = u.id
-          WHERE m.id = ?
-        `,
+            SELECT m.id, m.content, m.created_at, m.sender_id, 
+                   u.name as sender_name, u.avatar as sender_avatar,
+                   u.status as sender_status
+            FROM messages m
+            JOIN users u ON m.sender_id = u.id
+            WHERE m.id = ?
+          `,
             [result.insertId]
           );
 
@@ -272,32 +272,32 @@ io.on("connection", async (socket) => {
           // Mettre à jour les conversations des deux utilisateurs
           const [updatedConv] = await conn.query(
             `
-          SELECT c.id, 
-                 CASE 
-                   WHEN c.user1_id = ? THEN u2.id 
-                   ELSE u1.id 
-                 END as other_user_id,
-                 CASE 
-                   WHEN c.user1_id = ? THEN u2.name 
-                   ELSE u1.name 
-                 END as other_user_name,
-                 CASE 
-                   WHEN c.user1_id = ? THEN u2.avatar 
-                   ELSE u1.avatar 
-                 END as other_user_avatar,
-                 CASE 
-                   WHEN c.user1_id = ? THEN u2.status 
-                   ELSE u1.status 
-                 END as other_user_status,
-                 m.content as last_message,
-                 m.created_at as last_message_time,
-                 (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id AND sender_id != ? AND read_at IS NULL) as unread_count
-          FROM conversations c
-          JOIN users u1 ON c.user1_id = u1.id
-          JOIN users u2 ON c.user2_id = u2.id
-          LEFT JOIN messages m ON c.last_message_id = m.id
-          WHERE c.id = ?
-        `,
+            SELECT c.id, 
+                   CASE 
+                     WHEN c.user1_id = ? THEN u2.id 
+                     ELSE u1.id 
+                   END as other_user_id,
+                   CASE 
+                     WHEN c.user1_id = ? THEN u2.name 
+                     ELSE u1.name 
+                   END as other_user_name,
+                   CASE 
+                     WHEN c.user1_id = ? THEN u2.avatar 
+                     ELSE u1.avatar 
+                   END as other_user_avatar,
+                   CASE 
+                     WHEN c.user1_id = ? THEN u2.status 
+                     ELSE u1.status 
+                   END as other_user_status,
+                   m.content as last_message,
+                   m.created_at as last_message_time,
+                   (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id AND sender_id != ? AND read_at IS NULL) as unread_count
+            FROM conversations c
+            JOIN users u1 ON c.user1_id = u1.id
+            JOIN users u2 ON c.user2_id = u2.id
+            LEFT JOIN messages m ON c.last_message_id = m.id
+            WHERE c.id = ?
+          `,
             [userId, userId, userId, userId, userId, conversationId]
           );
 
@@ -391,83 +391,25 @@ io.on("connection", async (socket) => {
     }
   });
 
-  // Nouvel événement pour les nouvelles conversations
-  socket.on("new-conversation-created", ({ conversationId }) => {
-    // Diffuser à tous les utilisateurs concernés
-    io.emit("conversation-created", { conversationId });
-  });
-
-  // Événement pour les appels vocaux/vidéo
-  socket.on("call-user", ({ to, offer, callType }) => {
-    const recipientSocketId = onlineUsers.get(to);
-    if (recipientSocketId) {
-      io.to(recipientSocketId).emit("call-made", {
-        from: userId,
-        offer,
-        callType,
-        callerName: socket.user.name,
-        callerAvatar: socket.user.avatar,
-      });
-    }
-  });
-
-  socket.on("answer-call", ({ to, answer }) => {
-    const recipientSocketId = onlineUsers.get(to);
-    if (recipientSocketId) {
-      io.to(recipientSocketId).emit("call-answered", {
-        from: userId,
-        answer,
-      });
-    }
-  });
-
-  socket.on("call-rejected", ({ to }) => {
-    const recipientSocketId = onlineUsers.get(to);
-    if (recipientSocketId) {
-      io.to(recipientSocketId).emit("call-rejected", {
-        from: userId,
-      });
-    }
-  });
-
-  socket.on("end-call", ({ to }) => {
-    const recipientSocketId = onlineUsers.get(to);
-    if (recipientSocketId) {
-      io.to(recipientSocketId).emit("call-ended", {
-        from: userId,
-      });
-    }
-  });
-
-  socket.on("ice-candidate", ({ to, candidate }) => {
-    const recipientSocketId = onlineUsers.get(to);
-    if (recipientSocketId) {
-      io.to(recipientSocketId).emit("ice-candidate", {
-        from: userId,
-        candidate,
-      });
-    }
-  });
-
+  // Envoi de message de groupe
   socket.on(
     "send-group-message",
     async ({ groupId, content }, callback) => {
       try {
-        const userId = socket.user.id;
-
-        // Vérifier que l'utilisateur est membre du groupe
-        const [isMember] = await pool.query(
-          "SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?",
-          [groupId, userId]
-        );
-
-        if (isMember.length === 0) {
-          throw new Error("Non autorisé");
-        }
-
         const conn = await pool.getConnection();
+
         try {
           await conn.beginTransaction();
+
+          // Vérifier que l'utilisateur est membre du groupe
+          const [isMember] = await conn.query(
+            "SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?",
+            [groupId, userId]
+          );
+
+          if (isMember.length === 0) {
+            throw new Error("Non autorisé");
+          }
 
           // Insérer le message
           const [result] = await conn.query(
@@ -509,6 +451,33 @@ io.on("connection", async (socket) => {
             }
           });
 
+          // Mettre à jour le dernier message dans les groupes des membres
+          const [updatedGroup] = await conn.query(
+            `
+            SELECT g.id, g.name, g.description, g.created_by, 
+                   u.name as created_by_name, u.avatar as created_by_avatar,
+                   COUNT(gm.user_id) as member_count,
+                   ? as last_message,
+                   ? as last_message_time,
+                   (SELECT COUNT(*) FROM group_messages WHERE group_id = g.id AND sender_id != ? AND read_at IS NULL) as unread_count
+            FROM groups g
+            JOIN group_members gm ON g.id = gm.group_id
+            JOIN users u ON g.created_by = u.id
+            WHERE g.id = ?
+            GROUP BY g.id
+          `,
+            [content, messageData.created_at, userId, groupId]
+          );
+
+          if (updatedGroup.length > 0) {
+            members.forEach((member) => {
+              const socketId = onlineUsers.get(member.user_id);
+              if (socketId) {
+                io.to(socketId).emit("group-updated", updatedGroup[0]);
+              }
+            });
+          }
+
           callback({ success: true, message: messageData });
         } catch (err) {
           await conn.rollback();
@@ -531,7 +500,7 @@ io.on("connection", async (socket) => {
     try {
       await pool.query(
         "UPDATE group_messages SET read_at = NOW() WHERE group_id = ? AND sender_id != ? AND read_at IS NULL",
-        [groupId, socket.user.id]
+        [groupId, userId]
       );
 
       // Mettre à jour le groupe avec le nouveau nombre de messages non lus
@@ -549,7 +518,7 @@ io.on("connection", async (socket) => {
         WHERE g.id = ? AND gm.user_id = ?
         GROUP BY g.id
       `,
-        [groupId, socket.user.id]
+        [groupId, userId]
       );
 
       if (group.length > 0) {
@@ -557,6 +526,101 @@ io.on("connection", async (socket) => {
       }
     } catch (err) {
       console.error("Erreur marquage messages groupe comme lus:", err);
+    }
+  });
+
+  // Notification lorsqu'un membre quitte un groupe
+  socket.on("group-member-left", async ({ groupId, userId }) => {
+    try {
+      const [members] = await pool.query(
+        "SELECT user_id FROM group_members WHERE group_id = ?",
+        [groupId]
+      );
+
+      members.forEach((member) => {
+        const socketId = onlineUsers.get(member.user_id);
+        if (socketId) {
+          io.to(socketId).emit("group-member-left", { groupId, userId });
+        }
+      });
+    } catch (err) {
+      console.error("Erreur notification membre quittant:", err);
+    }
+  });
+
+  // Notification lorsqu'un membre est ajouté à un groupe
+  socket.on("group-members-added", async ({ groupId, members }) => {
+    try {
+      const [allMembers] = await pool.query(
+        "SELECT user_id FROM group_members WHERE group_id = ?",
+        [groupId]
+      );
+
+      allMembers.forEach((member) => {
+        const socketId = onlineUsers.get(member.user_id);
+        if (socketId) {
+          io.to(socketId).emit("group-members-added", { groupId, members });
+        }
+      });
+    } catch (err) {
+      console.error("Erreur notification ajout membres:", err);
+    }
+  });
+
+  // Notification lorsqu'un membre est supprimé d'un groupe
+  socket.on("group-member-removed", async ({ groupId, memberId }) => {
+    try {
+      const [members] = await pool.query(
+        "SELECT user_id FROM group_members WHERE group_id = ?",
+        [groupId]
+      );
+
+      members.forEach((member) => {
+        const socketId = onlineUsers.get(member.user_id);
+        if (socketId) {
+          io.to(socketId).emit("group-member-removed", { groupId, memberId });
+        }
+      });
+    } catch (err) {
+      console.error("Erreur notification suppression membre:", err);
+    }
+  });
+
+  // Notification lorsqu'un groupe est supprimé
+  socket.on("group-deleted", async ({ groupId }) => {
+    try {
+      const [members] = await pool.query(
+        "SELECT user_id FROM group_members WHERE group_id = ?",
+        [groupId]
+      );
+
+      members.forEach((member) => {
+        const socketId = onlineUsers.get(member.user_id);
+        if (socketId) {
+          io.to(socketId).emit("group-deleted", { groupId });
+        }
+      });
+    } catch (err) {
+      console.error("Erreur notification suppression groupe:", err);
+    }
+  });
+
+  // Notification lorsqu'un nouveau groupe est créé
+  socket.on("new-group", async (newGroup) => {
+    try {
+      const [members] = await pool.query(
+        "SELECT user_id FROM group_members WHERE group_id = ?",
+        [newGroup.id]
+      );
+
+      members.forEach((member) => {
+        const socketId = onlineUsers.get(member.user_id);
+        if (socketId) {
+          io.to(socketId).emit("new-group", newGroup);
+        }
+      });
+    } catch (err) {
+      console.error("Erreur notification nouveau groupe:", err);
     }
   });
 });
@@ -1369,12 +1433,10 @@ app.put(
       await conn.rollback();
       console.error("Erreur mise à jour profil:", err);
       if (req.file) fs.unlinkSync(req.file.path);
-      res
-        .status(500)
-        .json({
-          success: false,
-          message: "Erreur lors de la mise à jour du profil",
-        });
+      res.status(500).json({
+        success: false,
+        message: "Erreur lors de la mise à jour du profil",
+      });
     } finally {
       conn.release();
     }
